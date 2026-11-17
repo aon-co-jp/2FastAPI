@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tofastapi"
-version = "0.4.1"
+version = "0.4.2"
 description = "2FastAPI (to FastAPI): convert Flask / Django code to FastAPI (MFastAPI compatible)"
 readme = "README.md"
 requires-python = ">=3.9"

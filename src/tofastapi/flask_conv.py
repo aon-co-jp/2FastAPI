@@ -1023,11 +1023,13 @@ class _SQLAlchemy:
         _SQLAlchemy._current = self
         self._app = app
         self._engine = None
+        self._binds = {}
         outer = self
 
         class _Session(_orm.Session):
             def get_bind(self, mapper=None, clause=None, **kw):
-                return outer.engine
+                key = getattr(getattr(mapper, "class_", None), "__bind_key__", None)
+                return outer.get_engine(key)
 
         def _tablename(cls):
             return _re.sub(r"(?<!^)(?=[A-Z])", "_", cls.__name__).lower()
@@ -1039,24 +1041,44 @@ class _SQLAlchemy:
         self.session = _orm.scoped_session(_orm.sessionmaker(class_=_Session, query_cls=_BaseQuery), scopefunc=_REQ_ID.get)
         self._os = _os
 
+    def _make_engine(self, url):
+        kw = {}
+        if url.startswith("sqlite"):
+            kw["connect_args"] = {"check_same_thread": False}
+            if url in ("sqlite://", "sqlite:///:memory:"):
+                kw["poolclass"] = _sa.pool.StaticPool
+        return _sa.create_engine(url, **kw)
+
+    def get_engine(self, key=None):
+        cfg = getattr(self._app, "config", None) or {}
+        if key is None:
+            if self._engine is None:
+                url = cfg.get("SQLALCHEMY_DATABASE_URI") or self._os.environ.get("DATABASE_URL") or "sqlite:///app.db"
+                self._engine = self._make_engine(url)
+            return self._engine
+        if key not in self._binds:
+            self._binds[key] = self._make_engine((cfg.get("SQLALCHEMY_BINDS") or {})[key])
+        return self._binds[key]
+
     @property
     def engine(self):
-        if self._engine is None:
-            cfg = getattr(self._app, "config", None) or {}
-            url = cfg.get("SQLALCHEMY_DATABASE_URI") or self._os.environ.get("DATABASE_URL") or "sqlite:///app.db"
-            kw = {}
-            if url.startswith("sqlite"):
-                kw["connect_args"] = {"check_same_thread": False}
-                if url in ("sqlite://", "sqlite:///:memory:"):
-                    kw["poolclass"] = _sa.pool.StaticPool
-            self._engine = _sa.create_engine(url, **kw)
-        return self._engine
+        return self.get_engine(None)
 
-    def create_all(self):
-        self.Model.metadata.create_all(self.engine)
+    def _tables_by_bind(self, bind_key="__all__"):
+        out = {}
+        for m in self.Model.registry.mappers:
+            key = getattr(m.class_, "__bind_key__", None)
+            if bind_key == "__all__" or bind_key == key:
+                out.setdefault(key, []).append(m.local_table)
+        return out
 
-    def drop_all(self):
-        self.Model.metadata.drop_all(self.engine)
+    def create_all(self, bind_key="__all__"):
+        for key, tables in self._tables_by_bind(bind_key).items():
+            self.Model.metadata.create_all(self.get_engine(key), tables=tables)
+
+    def drop_all(self, bind_key="__all__"):
+        for key, tables in self._tables_by_bind(bind_key).items():
+            self.Model.metadata.drop_all(self.get_engine(key), tables=tables)
 
     def get_or_404(self, model, ident):
         rv = self.session.get(model, ident)
