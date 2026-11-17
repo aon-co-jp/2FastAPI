@@ -64,7 +64,7 @@ def test_apply_success_rewrites_pins(tmp_path, index):
     assert res["status"] == "upgraded", res
     assert "fakedep==2.0" in (p / "requirements.txt").read_text() and "# deps" in (p / "requirements.txt").read_text()
     assert '"fakedep==2.0"' in (p / "pyproject.toml").read_text()
-    assert up.apply(str(p), ["fakedep"], index=index, test_cmd="false")["status"] == "uptodate"
+    assert up.apply(str(p), ["fakedep"], index=index, test_cmd='"{python}" -c "raise SystemExit(1)"')["status"] == "uptodate"
 
 
 def test_apply_failure_leaves_files_untouched(tmp_path, index):
@@ -79,7 +79,7 @@ def test_resolution_failure_and_no_tests_and_no_network(tmp_path, index):
     p = project(tmp_path, "pass\n", pin="fakedep==1.0")
     (p / "requirements.txt").write_text("fakedep==1.0\nmissing-pkg-xyz==1.0\n")
     before = (p / "requirements.txt").read_text()
-    res = up.apply(str(p), ["fakedep"], index=index, test_cmd="true")
+    res = up.apply(str(p), ["fakedep"], index=index, test_cmd='"{python}" -c "pass"')
     assert res["status"] == "failed" and res["stage"] == "resolve"
     assert (p / "requirements.txt").read_text() == before
     q = project(tmp_path / "q" if (tmp_path / "q").mkdir() is None else tmp_path, "pass\n")

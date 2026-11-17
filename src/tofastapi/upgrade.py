@@ -304,6 +304,11 @@ def run(path: str, check: bool, do_apply: bool, packages=None, all_pins=False, i
     """CLI から呼ぶ。終了コード: 0 正常(更新なし/成功/--check) 1 テスト等で失敗(変更なし) 2 安全に停止(ネットワーク・テスト無しなど)"""
     import json
 
+    for st in (sys.stdout, sys.stderr):  # Windows の cp1252/cp932 でも日本語で落ちない
+        try:
+            st.reconfigure(errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
     if not os.path.isdir(path):
         print("not a directory: %s" % path, file=sys.stderr)
         return 2
