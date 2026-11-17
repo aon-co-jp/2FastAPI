@@ -1,6 +1,9 @@
 """Run a list of requests against the converted FastAPI app in a fresh interpreter (avoids module name clashes with the Django original)."""
 import json
+import os
 import sys
+
+os.environ.setdefault('DATABASE_URL', 'sqlite://')
 
 out_dir, req_file = sys.argv[1], sys.argv[2]
 sys.path.insert(0, out_dir)

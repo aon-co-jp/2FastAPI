@@ -9,6 +9,7 @@ import libcst as cst
 from libcst.metadata import MetadataWrapper, PositionProvider
 
 from .common import ParamSet, Result, Warn, convert_rule, count_name, dotted, ident, make_param, order_params, str_value
+from . import drf_model
 from .flask_conv import BodyRewriter, _code, _kw, _pos
 
 REQUEST_KINDS = {
@@ -37,8 +38,8 @@ DRF_FIELD_TYPES = {
     "UUIDField": "uuid.UUID", "DateTimeField": "datetime.datetime", "DateField": "datetime.date", "TimeField": "datetime.time",
     "ListField": "list", "DictField": "dict", "JSONField": "Any",
 }
-DRF_REMOVE_MODULES = {"rest_framework.response", "rest_framework.decorators", "rest_framework.status", "rest_framework.views", "rest_framework.serializers", "rest_framework.permissions", "rest_framework.authentication", "rest_framework.renderers", "rest_framework.parsers", "rest_framework.throttling"}
-DRF_REMOVE_NAMES = {"status", "serializers", "views", "response", "decorators"}
+DRF_REMOVE_MODULES = {"rest_framework.response", "rest_framework.decorators", "rest_framework.status", "rest_framework.views", "rest_framework.serializers", "rest_framework.permissions", "rest_framework.authentication", "rest_framework.renderers", "rest_framework.parsers", "rest_framework.throttling", "rest_framework.viewsets", "rest_framework.routers"}
+DRF_REMOVE_NAMES = {"status", "serializers", "views", "response", "decorators", "viewsets", "routers"}
 METHOD_DECORATORS = {"api_view": None, "require_GET": ["GET"], "require_POST": ["POST"], "require_safe": ["GET", "HEAD"], "require_http_methods": None}
 
 
@@ -248,10 +249,14 @@ class ViewsConverter(cst.CSTTransformer):
         self.count = 0
         self.depth = 0
         self.need_templates = False
+        self.need_model_prelude = False
         self.serializers: Set[str] = set()
         self.need_pydantic = False
         self.need_datetime = False
         self.need_field = False
+        self.models: Dict[str, dict] = {}
+        self.model_tables: Dict[str, str] = {}
+        self.msers: Dict[str, tuple] = {}
 
     def visit_Module(self, node):
         for st in node.body:
@@ -325,6 +330,8 @@ class ViewsConverter(cst.CSTTransformer):
     def leave_ImportFrom(self, original, updated):
         mod = dotted(updated.module) if updated.module is not None else ""
         if updated.relative:
+            if mod == "models" and not isinstance(updated.names, cst.ImportStar) and self.models and all(a.name.value in self.models for a in updated.names):
+                return cst.RemoveFromParent()
             if mod and mod.split(".")[0] in ("models", "forms", "serializers"):
                 self.warn(original, "orm", "`%s` is Django-specific (models/forms/serializers) and is not converted" % mod)
             return updated
@@ -356,6 +363,18 @@ class ViewsConverter(cst.CSTTransformer):
             conv = self._template_view(original, updated, cname)
             if conv is not None:
                 return cst.FlattenSentinel(conv)
+        if any(b.split(".")[-1] == "ModelSerializer" for b in bases):
+            conv = self._model_serializer(original, cname)
+            if conv is not None:
+                return conv
+        if cname in self.routes and any(b.split(".")[-1] in ("ModelViewSet", "ReadOnlyModelViewSet") for b in bases):
+            conv = self._model_viewset(original, updated, cname, any(b.split(".")[-1] == "ReadOnlyModelViewSet" for b in bases))
+            if conv is not None:
+                return cst.FlattenSentinel(conv)
+        if cname in self.routes and any(b.split(".")[-1] in ("ViewSet", "GenericViewSet") for b in bases):
+            conv = self._viewset(original, updated, cname)
+            if conv:
+                return cst.FlattenSentinel(conv)
         plain_view = any(b.split(".")[-1] in ("View", "APIView") and not b.startswith("rest_framework.generics") for b in bases)
         if plain_view and cname in self.routes:
             funcs = []
@@ -384,6 +403,93 @@ class ViewsConverter(cst.CSTTransformer):
             if b.endswith(("View", "ViewSet", "APIView", "Model", "Form", "ModelForm", "Serializer")):
                 self.warn(original, "class-view", "class `%s(%s)` is not converted" % (cname, b))
         return updated
+
+    def _model_serializer(self, original, cname):
+        mv = drf_model.meta_value(original, "model")
+        mname = (dotted(mv) or "").split(".")[-1] if mv is not None else ""
+        model = self.models.get(mname)
+        if model is None or not model["ok"]:
+            self.warn(original, "orm", "ModelSerializer %s: model %r is missing or has unsupported field types: not converted" % (cname, mname))
+            return None
+        fields = drf_model.serializer_fields(original, model)
+        if fields is None:
+            self.warn(original, "orm", "ModelSerializer %s: Meta.fields is not a literal list of simple model fields: not converted" % cname)
+            return None
+        ro = drf_model.meta_value(original, "read_only_fields")
+        ro_names = {str_value(e.value) for e in ro.elements} if isinstance(ro, (cst.List, cst.Tuple)) else set()
+        self.msers[cname] = (mname, fields, ro_names)
+        self.model_tables[mname] = drf_model.table_code(mname, model)
+        self.need_pydantic = True
+        self.need_field = True
+        self.typing.add("Optional")
+        self.warn(original, "serializer", "ModelSerializer %s -> pydantic model + SQLAlchemy table %s (simple fields only)" % (cname, model["table"]))
+        return cst.parse_statement(drf_model.schema_code(cname, fields))
+
+    def _model_viewset(self, original, updated, cname, readonly):
+        qs = ser = None
+        for st in updated.body.body:
+            if isinstance(st, cst.SimpleStatementLine) and st.body and isinstance(st.body[0], cst.Assign):
+                a = st.body[0]
+                t = dotted(a.targets[0].target)
+                if t == "queryset":
+                    qs = _code(a.value)
+                elif t == "serializer_class":
+                    ser = dotted(a.value)
+                elif t:
+                    self.warn(st, "class-view", "%s.%s is not converted (permissions/filters/pagination/lookup)" % (cname, t))
+            elif isinstance(st, cst.FunctionDef):
+                self.warn(st, "class-view", "%s.%s overrides the default behavior: not converted, the generated default action is used" % (cname, st.name.value))
+        if not qs or not qs.replace(" ", "").endswith(".objects.all()") or ser not in self.msers:
+            self.warn(original, "class-view", "%s: needs `queryset = Model.objects.all()` and a convertible `serializer_class`: not converted" % cname)
+            return None
+        mname, fields, ro_names = self.msers[ser]
+        if qs.split(".objects")[0].strip() != mname:
+            self.warn(original, "class-view", "%s: queryset model differs from the serializer's model: not converted" % cname)
+            return None
+        acts = {"list", "retrieve"} if readonly else {"list", "create", "retrieve", "update", "partial_update", "destroy"}
+        pl = [p for p, pr in self.routes[cname] if not pr]
+        pd = [p for p, pr in self.routes[cname] if pr]
+        code = drf_model.viewset_code(cname, mname, ser, fields, pl, pd, acts, ro_names)
+        self.fastapi |= {"Depends", "Request"}
+        self.responses |= {"JSONResponse", "Response"}
+        self.count += len(pl) * (2 if not readonly else 1) + len(pd) * (4 if not readonly else 1)
+        self.need_model_prelude = True
+        self.warn(original, "class-view", "ModelViewSet %s -> generated CRUD routes over SQLAlchemy (DATABASE_URL, default sqlite:///db.sqlite3)" % cname)
+        return list(cst.parse_module(code).body)
+
+    VIEWSET_ACTIONS = {
+        "list": ("GET", False), "create": ("POST", False), "retrieve": ("GET", True),
+        "update": ("PUT", True), "partial_update": ("PATCH", True), "destroy": ("DELETE", True),
+    }
+
+    def _viewset(self, original, updated, cname):
+        """DRF ViewSet + router.register -> one route function per action (list/create on the collection, others on {pk})."""
+        paths = self.routes[cname]
+        funcs = []
+        for st in updated.body.body:
+            if not isinstance(st, cst.FunctionDef):
+                if isinstance(st, cst.SimpleStatementLine) and st.body and isinstance(st.body[0], cst.Assign):
+                    self.warn(st, "class-view", "class attribute in %s is not converted: inline it where used" % cname)
+                continue
+            m = st.name.value
+            if m not in self.VIEWSET_ACTIONS:
+                self.warn(st, "class-view", "%s.%s (custom action/helper) is not converted" % (cname, m))
+                continue
+            meth, detail = self.VIEWSET_ACTIONS[m]
+            fname = "%s_%s" % (cname, m)
+            self.routes[fname] = [(p, pl) for p, pl in paths if bool(pl) == detail]
+            # path parameters cannot have defaults in FastAPI (`pk=None`)
+            ps = [p.with_changes(default=None, equal=cst.MaybeSentinel.DEFAULT) if p.name.value == "pk" else p for p in st.params.params]
+            fn = st.with_changes(name=cst.Name(fname), params=st.params.with_changes(params=ps), leading_lines=[cst.EmptyLine(), cst.EmptyLine()])
+            conv = self._convert(st, fn, fname, [meth], True)
+            if count_name(conv.body, "self") > 0:
+                self.warn(st, "class-view", "%s.%s uses `self`: check the converted function" % (cname, m))
+            funcs.append(conv)
+        if not funcs:
+            self.warn(original, "class-view", "ViewSet %s has no standard actions" % cname)
+            return None
+        self.warn(original, "class-view", "ViewSet %s converted to one route function per action (%s)" % (cname, ", ".join(f.name.value for f in funcs)))
+        return funcs
 
     def _template_view(self, original, updated, cname):
         tmpl = None
@@ -545,6 +651,8 @@ class ViewsConverter(cst.CSTTransformer):
         body.insert(last + 1, cst.parse_statement("\nrouter = APIRouter()\n") if False else cst.parse_statement("router = APIRouter()"))
         if self.need_templates:
             body.insert(last + 2, cst.parse_statement('templates = Jinja2Templates(directory="templates")'))
+        if self.need_model_prelude:
+            body[last + 1:last + 1] = list(cst.parse_module(drf_model.prelude_code(self.model_tables)).body)
         return updated.with_changes(body=body)
 
 
@@ -600,8 +708,25 @@ def parse_urls(src: str):
     mod = cst.parse_module(src)
     imports: Dict[str, Tuple[str, int]] = {}  # local name -> (module, level) ; for `from X import name`: (X.name-or-X, level)
     entries = []
+    routers: Dict[str, list] = {}  # router variable -> [(prefix, view dotted name)]
+
+    def _router_urls(v):
+        if isinstance(v, cst.Attribute) and v.attr.value == "urls" and isinstance(v.value, cst.Name):
+            return v.value.value
+        return None
 
     class V(cst.CSTVisitor):
+        def visit_Call(self, n: cst.Call):
+            if isinstance(n.func, cst.Attribute) and n.func.attr.value == "register" and isinstance(n.func.value, cst.Name) and len(n.args) >= 2:
+                pre = str_value(n.args[0].value)
+                vd = dotted(n.args[1].value)
+                if pre is not None and vd:
+                    routers.setdefault(n.func.value.value, []).append((pre, vd))
+
+        def visit_AugAssign(self, n: cst.AugAssign):
+            if isinstance(n.target, cst.Name) and n.target.value == "urlpatterns" and _router_urls(n.value):
+                entries.append(("path", "", ("router", _router_urls(n.value))))
+
         def visit_ImportFrom(self, n: cst.ImportFrom):
             level = len(n.relative)
             m = dotted(n.module) if n.module is not None else ""
@@ -617,7 +742,9 @@ def parse_urls(src: str):
                 imports[local] = (dotted(a.name), 0, None)
 
         def visit_Assign(self, n: cst.Assign):
-            if any(isinstance(t.target, cst.Name) and t.target.value == "urlpatterns" for t in n.targets) and isinstance(n.value, (cst.List, cst.Tuple)):
+            if any(isinstance(t.target, cst.Name) and t.target.value == "urlpatterns" for t in n.targets) and _router_urls(n.value):
+                entries.append(("path", "", ("router", _router_urls(n.value))))
+            elif any(isinstance(t.target, cst.Name) and t.target.value == "urlpatterns" for t in n.targets) and isinstance(n.value, (cst.List, cst.Tuple)):
                 for el in n.value.elements:
                     c = el.value
                     if not isinstance(c, cst.Call):
@@ -631,6 +758,9 @@ def parse_urls(src: str):
                     v = c.args[1].value
                     if isinstance(v, cst.Call) and dotted(v.func) == "include":
                         a0 = v.args[0].value if v.args else None
+                        if a0 is not None and _router_urls(a0):
+                            entries.append((fn, pat, ("router", _router_urls(a0))))
+                            continue
                         target = str_value(a0) or (dotted(a0) if a0 is not None else None)
                         entries.append((fn, pat, ("include", target or "")))
                     elif isinstance(v, cst.Call) and isinstance(v.func, cst.Attribute) and v.func.attr.value == "as_view":
@@ -641,7 +771,7 @@ def parse_urls(src: str):
                         entries.append((fn, pat, ("other", _code(v))))
 
     mod.visit(V())
-    return entries, imports
+    return entries, imports, routers
 
 
 def _module_file(root: str, module: str) -> Optional[str]:
@@ -692,7 +822,7 @@ def collect_routes(root: str, urls_file: str, prefix: str = "", seen=None, warns
         return out
     seen = seen | {urls_file}
     with open(urls_file, encoding="utf-8") as fh:
-        entries, imports = parse_urls(fh.read())
+        entries, imports, routers = parse_urls(fh.read())
     for kind, pat, view in entries:
         if kind in ("re_path", "url"):
             local = []
@@ -716,6 +846,15 @@ def collect_routes(root: str, urls_file: str, prefix: str = "", seen=None, warns
             for vf, fns in sub.items():
                 for fn, rl in fns.items():
                     out.setdefault(vf, {}).setdefault(fn, []).extend(rl)
+        elif view[0] == "router":
+            for rpre, vd in routers.get(view[1], []):
+                r = _resolve(urls_file, root, imports, vd)
+                if r is None:
+                    warns.append(Warn(0, "view", "viewset %r could not be resolved" % vd))
+                    continue
+                f, cn = r
+                base = _join(prefix, conv + rpre.strip("/") + "/")
+                out.setdefault(f, {}).setdefault(cn, []).extend([(base, []), (base + "{pk}/", [("pk", "str")])])
         elif view[0] == "cbv":
             r = _resolve(urls_file, root, imports, view[1])
             if r is None:
@@ -759,10 +898,12 @@ def convert_project(project: str, out_dir: str) -> Result:
     os.makedirs(out_dir, exist_ok=True)
     total = 0
     modules = []
+    models = drf_model.scan_models(root)
     for vf, fns in routes.items():
         with open(vf, encoding="utf-8") as fh:
             src = fh.read()
         conv = ViewsConverter({fn: rl for fn, rl in fns.items()})
+        conv.models = models
         new = MetadataWrapper(cst.parse_module(src)).visit(conv)
         rel = os.path.relpath(vf, root)
         dest = os.path.join(out_dir, rel)

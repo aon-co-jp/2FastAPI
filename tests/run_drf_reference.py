@@ -9,6 +9,12 @@ os.environ["DJANGO_SETTINGS_MODULE"] = "config.settings"
 import django  # noqa: E402
 
 django.setup()
+from django.conf import settings  # noqa: E402
+
+if settings.DATABASES.get('default'):
+    from django.core.management import call_command  # noqa: E402
+
+    call_command('migrate', run_syncdb=True, verbosity=0)
 from rest_framework.test import APIClient  # noqa: E402
 
 c = APIClient()
