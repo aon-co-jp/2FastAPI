@@ -55,6 +55,9 @@ KNOWN_EXT = {
 }
 
 
+from .jwt_shim import JWT_HELPER, JWT_MIDDLEWARE  # noqa: E402
+
+
 def _code(node: cst.CSTNode) -> str:
     return cst.Module([]).code_for_node(node)
 
@@ -358,6 +361,8 @@ class FlaskConverter(cst.CSTTransformer):
         self.need_sqla = False
         self.need_login = False
         self.login_vars = []
+        self.need_jwt = False
+        self.jwt_vars = []
         self.sqla_vars = []
         self.uses_config = False
         self.flask_names: Set[str] = set()
@@ -425,6 +430,11 @@ class FlaskConverter(cst.CSTTransformer):
             self.fastapi.add("HTTPException")
             self.warn(original, "flask-login", "Flask-Login -> a small session based shim (LoginManager/UserMixin/login_user/logout_user/current_user/login_required on request.session). Set a real SECRET_KEY; `fresh_login_required` behaves like `login_required` and remember-me cookies are not issued (session only)")
             return cst.RemoveFromParent()
+        if mod == "flask_jwt_extended":
+            self.need_jwt = True
+            self.responses.add("JSONResponse")
+            self.warn(original, "flask-jwt", "Flask-JWT-Extended -> a small PyJWT shim (create_access_token/create_refresh_token/jwt_required(optional, fresh, refresh)/get_jwt/get_jwt_identity/verify_jwt_in_request; same claims and error answers, header tokens only). Needs `pip install pyjwt`; set JWT_SECRET_KEY in app.config. Cookies/CSRF, blocklists and the *_loader callbacks are not converted")
+            return cst.RemoveFromParent()
         if mod == "flask_cors":
             self.need_cors = True
             return cst.RemoveFromParent()
@@ -460,6 +470,10 @@ class FlaskConverter(cst.CSTTransformer):
                 self.need_login = True
                 self.login_vars.append(updated.targets[0].target.value)
                 return updated.with_changes(value=cst.parse_expression("_LoginManager()"))
+            if f in ("JWTManager", "flask_jwt_extended.JWTManager") and isinstance(updated.targets[0].target, cst.Name):
+                self.need_jwt = True
+                self.jwt_vars.append(updated.targets[0].target.value)
+                return updated.with_changes(value=cst.parse_expression("_JWTManager(%s)" % (_code(updated.value.args[0].value) if updated.value.args else "")))
             if f in ("SQLAlchemy", "flask_sqlalchemy.SQLAlchemy") and isinstance(updated.targets[0].target, cst.Name):
                 self.need_sqla = True
                 self.fastapi.add("HTTPException")
@@ -492,7 +506,7 @@ class FlaskConverter(cst.CSTTransformer):
                         self.warn(original, "debug", "app.run(debug=...) -> run `uvicorn module:app --reload` for auto-reload")
                 new = cst.parse_statement("uvicorn.run(%s%s)" % (parts[0], (", " + ", ".join(kws)) if kws else ""))
                 return new.with_changes(leading_lines=updated.leading_lines)
-            if len(parts) == 2 and parts[1] == "init_app" and (parts[0] in self.sqla_vars or parts[0] in self.login_vars):
+            if len(parts) == 2 and parts[1] == "init_app" and (parts[0] in self.sqla_vars or parts[0] in self.login_vars or parts[0] in self.jwt_vars):
                 return cst.RemoveFromParent()
             if len(parts) == 2 and parts[1] == "register_blueprint" and call.args:
                 prefix = _kw(call.args[1:], "url_prefix")
@@ -577,6 +591,9 @@ class FlaskConverter(cst.CSTTransformer):
         routes, others = self._routes_of(updated)
         if self.hooks and not routes:
             return self._convert_hook(original, updated, self.hooks, others)
+        if not routes and any(isinstance(d.decorator, cst.Attribute) and isinstance(d.decorator.value, cst.Name) and d.decorator.value.value in self.jwt_vars for d in updated.decorators):
+            self.warn(original, "flask-jwt", "@%s.%s callback on %s is not converted (the shim uses the default answers); the decorator was dropped" % ("jwt", "callback", original.name.value))
+            return updated.with_changes(decorators=[d for d in updated.decorators if not (isinstance(d.decorator, cst.Attribute) and isinstance(d.decorator.value, cst.Name) and d.decorator.value.value in self.jwt_vars)])
         if not routes:
             if any(isinstance(d.decorator, cst.Attribute) and isinstance(d.decorator.value, cst.Name) and d.decorator.value.value in self.login_vars
                    and d.decorator.attr.value in ("user_loader", "request_loader", "unauthorized_handler") for d in updated.decorators):
@@ -753,6 +770,8 @@ class FlaskConverter(cst.CSTTransformer):
                 body0.insert(at + 1, cst.parse_statement("%s.add_middleware(SessionMiddleware, secret_key=%s)" % (app_name, secret)))
         if self.need_login and app_name and app_i is not None:
             body0.insert(app_i + 1, cst.parse_statement(LOGIN_MIDDLEWARE % {"app": app_name}))
+        if self.need_jwt and app_name and app_i is not None:
+            body0.insert(app_i + 1, cst.parse_statement(JWT_MIDDLEWARE % {"app": app_name}))
         if self.need_sqla and app_name:
             for i, st in enumerate(body0):
                 if isinstance(st, cst.SimpleStatementLine) and st.body and isinstance(st.body[0], cst.Assign) and code_of(st.body[0].value).startswith("_SQLAlchemy("):
@@ -796,6 +815,8 @@ class FlaskConverter(cst.CSTTransformer):
             helper += list(cst.parse_module(SQLA_HELPER).body)
         if self.need_login:
             helper += list(cst.parse_module(LOGIN_HELPER).body)
+        if self.need_jwt:
+            helper += list(cst.parse_module(JWT_HELPER).body)
         return updated.with_changes(body=body[:idx] + header + helper + body[idx:])
 
 

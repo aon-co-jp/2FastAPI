@@ -7,7 +7,7 @@
 #endif
 [Setup]
 AppName=2FastAPI
-AppVersion=0.5.1
+AppVersion=0.5.2
 AppPublisher=aon-co-jp
 DefaultDirName={autopf}\2FastAPI
 DefaultGroupName=2FastAPI

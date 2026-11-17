@@ -2,13 +2,13 @@
 
 ## 日本語
 **状態**: v0.2.0+。Flask(フック・render_template・request.files・Flask-RESTful/MethodView)とDjango(View継承クラス)をFastAPIへ変換。scan/auto/convertで複数プロジェクトを自動検出し、変換先を英日で質問(無ければ作成確認)。差分テスト36件、CIは3OS成功。
-**未了**: DRF(TemplateViewは変換対応済み)、Flask-SQLAlchemy/marshmallow/JWTの組み合わせ、PyPI公開、Python 3.14ネイティブのlibcst(WindowsのPythonにlibcst無し→テストはWSL)。
+**未了**: PyPI公開(DRF ViewSet/ModelViewSet・Flask JWT/marshmallow は v0.5.2 で対応済み)、Python 3.14ネイティブのlibcst(WindowsのPythonにlibcst無し→テストはWSL)。
 **再開用メッセージ**: 「`F:\runo\PORTING.md` 末尾の「2026-11-15 別アカウントでの再開用メモ」と、`F:$1\PORTING.md` を読んで、未了の続きを確認なしで開発・TEST・DEBUG・commit・pushして。チャットは日本語のみ。」
 **テスト**: WSL: powershell -c "wsl -d Ubuntu -- bash /mnt/f/2FastAPI/run-tests.sh" (setup-wsl.sh で環境作成 / creates the env; TAILN=100 で出力を増やす / more output)
 
 ## English
 **Status**: v0.2.0+. Converts Flask (hooks, render_template, request.files, Flask-RESTful/MethodView) and Django (View subclasses) to FastAPI. scan/auto/convert detect several projects and ask in English and Japanese where to put the result (creating folders). 36 differential tests, CI green on 3 OSes.
-**Open**: DRF (TemplateView now converted), Flask-SQLAlchemy/marshmallow/JWT combinations, PyPI publication, libcst on native Windows Python 3.14 (tests run in WSL).
+**Open**: PyPI publication (DRF ViewSet/ModelViewSet and Flask JWT/marshmallow done in v0.5.2), libcst on native Windows Python 3.14 (tests run in WSL).
 **Resume message**: "Read the 2026-11-15 section at the end of `F:\runo\PORTING.md` and `F:$1\PORTING.md`, then continue the open items without asking (develop, test, debug, commit, push). Chat in Japanese only."
 **Tests**: WSL: powershell -c "wsl -d Ubuntu -- bash /mnt/f/2FastAPI/run-tests.sh" (setup-wsl.sh で環境作成 / creates the env; TAILN=100 で出力を増やす / more output)
 
@@ -175,3 +175,7 @@
 - **定期試験**: CI を毎日(UTC 03:23)実行し、最新の Python・Flask・Django・FastAPI・Starlette(RMojo は最新の CPython との差分試験)で再試験。失敗したら日付つきの issue を1件起こす。
 - **easy-web.tokyo**: `runo/scripts/refresh_versions.py` を VPS のタイマー(`easy-web-intros-refresh.timer`、1時間ごと)で実行し、MFastAPI・RMojo・2FastAPI・2FastAPI-VSC の最新版と上流(Python・Flask・Django・FastAPI・Starlette・Rust・Mojo)の最新版を各紹介ページと `/demo` に表示(`<製品>/versions.json`)。ページはダウンロード専用のまま。
 - **未了**: 上流の新版が出たときに、利用者の環境(Flask/Django 等)まで自動で上げる機能は無い(本製品が更新するのは本製品自身)。aruaru-llm の同梱は未着手(open-cpu は同梱済み)。iPhone・iPad には対応していない。
+
+## DRF ViewSet・ModelViewSet / Flask JWT・marshmallow (2026-11-17)
+**日本語 (v0.5.2, 2026-11-17)**: DRF の `ViewSet`(`list/create/retrieve/update/destroy`)と `DefaultRouter`/`SimpleRouter` の `register`、`ModelSerializer`(`Meta.model/fields/read_only_fields`、単純なフィールドのみ)+ Django `models.Model` → SQLAlchemy テーブル+pydantic、`ModelViewSet`/`ReadOnlyModelViewSet`(`queryset = Model.objects.all()`)→ 生成した CRUD ルート(環境変数 `DATABASE_URL`、既定 `sqlite:///db.sqlite3`)を変換。Flask-JWT-Extended(`JWTManager`、`create_access_token`/`create_refresh_token`、`jwt_required(optional/fresh/refresh)`、`get_jwt`/`get_jwt_identity`、`verify_jwt_in_request`)→ PyJWT 互換層(クレームも 401/422 の応答文言も同じ。Flask 側が発行したトークンを変換後が受け付けることを確認。要 `pyjwt`)。marshmallow はそのまま動く(`Schema.load` 等は変更不要)ため Flask-SQLAlchemy+marshmallow+JWT の組み合わせを差分試験(`tests/test_flask_jwt_marshmallow.py`、`tests/test_drf_viewset.py`、`tests/test_drf_model.py`)。**未対応**: `@action`・`generics`・Router の `format` 接尾辞、ModelSerializer の入れ子/日時/Decimal/外部キー、JWT の Cookie/CSRF・ブロックリスト・`*_loader`、`flask_marshmallow`(`ma.SQLAlchemyAutoSchema`)。
+**English (v0.5.2, 2026-11-17)**: DRF `ViewSet` (`list/create/retrieve/update/destroy`) with `DefaultRouter`/`SimpleRouter` `register`; `ModelSerializer` (`Meta.model/fields/read_only_fields`, simple fields only) + Django `models.Model` -> SQLAlchemy table + pydantic; `ModelViewSet`/`ReadOnlyModelViewSet` (`queryset = Model.objects.all()`) -> generated CRUD routes (env `DATABASE_URL`, default `sqlite:///db.sqlite3`). Flask-JWT-Extended (`JWTManager`, `create_access_token`/`create_refresh_token`, `jwt_required(optional/fresh/refresh)`, `get_jwt`/`get_jwt_identity`, `verify_jwt_in_request`) -> a PyJWT shim with the same claims and the same 401/422 answers (a token issued by the Flask app is accepted by the converted app; needs `pyjwt`). Plain marshmallow keeps working unchanged (`Schema.load` etc.), so the Flask-SQLAlchemy + marshmallow + JWT combination is covered by differential tests (`tests/test_flask_jwt_marshmallow.py`, `tests/test_drf_viewset.py`, `tests/test_drf_model.py`). **Not converted**: `@action`, `generics`, router `format` suffixes, nested/datetime/Decimal/ForeignKey ModelSerializer fields, JWT cookies/CSRF/blocklist/`*_loader` callbacks, `flask_marshmallow` (`ma.SQLAlchemyAutoSchema`).
