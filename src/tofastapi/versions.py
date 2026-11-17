@@ -90,7 +90,9 @@ def _code_hints(code: str) -> Dict[str, Tuple[str, str]]:
         h["flask"] = ("<2.3", "uses an API removed in Flask 2.3/3.0 (before_first_request / JSONEncoder / escape)")
     elif re.search(r"@\w+\.(get|post|put|delete|patch)\(", code):
         h["flask"] = (">=2.0", "uses @app.get/@app.post shortcuts")
-    if re.search(r"from django\.conf\.urls import[^\n]*\burl\b|ugettext|from django\.utils\.encoding import force_text", code):
+    if re.search(r"render_to_response", code):
+        h["django"] = ("<3.0", "uses render_to_response (removed in Django 3.0)")
+    elif re.search(r"from django\.conf\.urls import[^\n]*\burl\b|ugettext|from django\.utils\.encoding import force_text", code):
         h["django"] = ("<4.0", "uses django.conf.urls.url / ugettext (removed in Django 4.0)")
     elif re.search(r"DEFAULT_AUTO_FIELD|from django\.urls import[^\n]*\bpath\b", code):
         h["django"] = (">=3.2", "uses django.urls.path / DEFAULT_AUTO_FIELD")

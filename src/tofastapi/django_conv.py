@@ -51,6 +51,7 @@ class DjangoRewriter(BodyRewriter):
         self.methods_seen: Set[str] = set()
         self.serializers: Set[str] = set()
         self.serial_vars: Set[str] = set()
+        self.need_templates = False
 
     def _kind_param(self, base: str, key: str, default, type_node, required: bool):
         kind = REQUEST_KINDS[base]
@@ -134,6 +135,21 @@ class DjangoRewriter(BodyRewriter):
         if d == "redirect" and pos and str_value(pos[0].value) is not None and (str_value(pos[0].value).startswith(("/", "http://", "https://"))):
             self.responses.add("RedirectResponse")
             return cst.parse_expression("RedirectResponse(%s, status_code=302)" % _code(pos[0].value))
+        if d in ("render", "render_to_response") and len(pos) >= 1:
+            # render(request, "t.html", ctx, status=..) / render_to_response("t.html", ctx) (Django < 3.0) -> Jinja2Templates
+            if d == "render":
+                rest = pos[1:]
+            else:
+                rest = pos
+                self.need_request = True
+            if rest and str_value(rest[0].value) is not None:
+                ctx = rest[1].value if len(rest) > 1 else _kw(args, "context")
+                status = _kw(args, "status")
+                self.need_templates = True
+                self.need_request = True
+                src = "templates.TemplateResponse(request, %s, %s%s)" % (_code(rest[0].value), _code(ctx) if ctx is not None else "{}", ", status_code=%s" % _code(status) if status is not None else "")
+                self.notes.append("%s(...) -> Jinja2Templates: check Django template tags in %s" % (d, str_value(rest[0].value)))
+                return cst.parse_expression(src)
         if d in ("render", "redirect", "reverse", "get_object_or_404", "get_list_or_404", "render_to_string", "get_template", "login", "logout", "authenticate"):
             self.notes.append("%s(...) is not converted automatically" % d)
         if d.endswith(".objects.get") or ".objects." in d:
@@ -492,6 +508,8 @@ class ViewsConverter(cst.CSTTransformer):
         self.fastapi |= rw.fastapi
         self.responses |= rw.responses
         self.typing |= rw.typing
+        if rw.need_templates:
+            self.need_templates = True
         for n in notes:
             self.warn(original, "convert", "%s: %s" % (name, n))
         return updated.with_changes(decorators=decs + others, params=updated.params.with_changes(params=order_params(newp)), body=body)
@@ -768,6 +786,14 @@ def convert_project(project: str, out_dir: str) -> Result:
         missing = [fn for fn in fns if not re.search(r"(def|class)\s+%s\b" % re.escape(fn), src)]
         for fn in missing:
             warns.append(Warn(0, "view", "%s: view function %s not found (class-based view?)" % (rel, fn)))
+    # Django templates (root `templates/` and `<app>/templates/`) are merged into `templates/` for Jinja2Templates
+    import shutil
+
+    for dp, dns, _ in os.walk(root):
+        dns[:] = [x for x in dns if x not in (".git", "node_modules", "__pycache__", "venv", ".venv", "site-packages")]
+        if os.path.basename(dp) == "templates" and os.path.abspath(dp) != os.path.abspath(os.path.join(out_dir, "templates")):
+            shutil.copytree(dp, os.path.join(out_dir, "templates"), dirs_exist_ok=True)
+            dns[:] = []
     lines = ["from fastapi import FastAPI", ""]
     for i, m in enumerate(modules):
         lines.append("from %s import router as router_%d" % (m, i))

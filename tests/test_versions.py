@@ -42,3 +42,10 @@ def test_old_template_response_form(tmp_path):
     assert "fastapi==0.100.0" in open(os.path.join(old, "requirements.txt")).read()
     assert open(os.path.join(new, "requirements.txt")).read().startswith("fastapi\n")
     assert "Source (detected)" in open(os.path.join(new, "CONVERSION_REPORT.md"), encoding="utf-8").read()
+
+
+def test_render_to_response_hints_old_django():
+    from tofastapi import versions as V
+
+    d = V.detect_source("/nonexistent-project", ["from django.shortcuts import render_to_response\n"])
+    assert d["django"]["version"] == "<3.0"
