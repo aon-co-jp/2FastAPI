@@ -4,6 +4,7 @@
 2fastapi django project_dir -o out_dir
 2fastapi scan DIR [--json]            list Flask / Django projects found below DIR
 2fastapi auto DIR [-o OUT] [--yes]    scan, ask (English / Japanese) what and where to convert, convert
+2fastapi upgrade P --check|--apply   newer upstream versions of the pins (explicit only; --apply tests in a temp venv, rolls back on failure)
 2fastapi gui | web                   graphical wizard (folder pickers, 13 languages) / the same in the browser (local only)
 2fastapi convert --kind flask|django --path P -o OUT   (used by the VS Code extension)
 """
@@ -52,6 +53,16 @@ def main(argv=None) -> int:
     g = sub.add_parser("gui", help="open the graphical wizard (folder pickers, 13 languages)")
     g.add_argument("--selftest", action="store_true", help=argparse.SUPPRESS)
     g.add_argument("--install-shortcut", action="store_true", help="create a desktop shortcut with an icon (Windows)")
+    u = sub.add_parser("upgrade", help="check / apply newer upstream versions of the pinned dependencies (explicit command only, never automatic)")
+    u.add_argument("path", help="project directory (requirements*.txt / pyproject.toml)")
+    um = u.add_mutually_exclusive_group(required=True)
+    um.add_argument("--check", action="store_true", help="list pinned vs latest versions; changes nothing")
+    um.add_argument("--apply", action="store_true", help="upgrade in a temporary venv copy, run the tests, rewrite the pins only if all pass")
+    u.add_argument("--package", action="append", help="package to consider (repeatable; default: Flask/Django/FastAPI/Starlette and related)")
+    u.add_argument("--all", action="store_true", help="consider every pinned (==) package")
+    u.add_argument("--test-cmd", default=None, help="test command run in the copy ({python} = the temporary venv's python); default: pytest")
+    u.add_argument("--index-url", default=None, help="package index (PEP 503 simple); default: PyPI")
+    u.add_argument("--json", action="store_true")
     ns = ap.parse_args(argv)
 
     cmd = ns.cmd
@@ -63,6 +74,10 @@ def main(argv=None) -> int:
         from .gui import main as gui_main
 
         return gui_main(selftest=ns.selftest, install_shortcut=ns.install_shortcut)
+    if cmd == "upgrade":
+        from .upgrade import run as upgrade_run
+
+        return upgrade_run(ns.path, ns.check, ns.apply, ns.package, ns.all, ns.index_url, ns.test_cmd, ns.json)
     if cmd == "scan":
         from .scan import scan
 
