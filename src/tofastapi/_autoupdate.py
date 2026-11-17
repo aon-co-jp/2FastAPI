@@ -142,7 +142,7 @@ def setup_asset_name():
 def _frozen_start():
     """インストーラー版(PyInstaller)。pip は使えないので、公式の Setup を取得・検証して置き、次の起動で静かに実行する。"""
     if os.name != "nt":
-        return
+        return _frozen_notice()  # .deb / .pkg 版: システム側の管理なので自動では書き換えない(新版の通知だけ)
     pending = os.path.join(state_dir(), "pending-setup.exe")
     if os.path.exists(pending) and _read("pending_version"):
         ver = _read("pending_version")
@@ -170,6 +170,46 @@ def _frozen_start():
             _write("last_error", repr(e))
 
     threading.Thread(target=work, daemon=True).start()
+
+
+NOTICE_URL = "https://github.com/%s/releases/latest" % REPO
+
+
+def _frozen_notice():
+    """macOS の .pkg / Linux の .deb 版。自分自身を書き換えず、新しい版があることを一度だけ stderr に知らせる。
+
+    確認は24時間に1回、切り離したスレッドで行う(起動は遅くならない)。導入し直すのは利用者(新しい .pkg / .deb を入れる)。
+    """
+    ver = _read("available")
+    if ver:
+        print("%s: 新しい版 %s があります。%s から .pkg / .deb を入れ直してください(自動では更新しません。止めるには %s=1)" % (DIST, ver, NOTICE_URL, ENV_OFF), file=sys.stderr)
+        try:
+            os.remove(os.path.join(state_dir(), "available"))
+        except OSError:
+            pass
+    try:
+        last = float(_read("last_check") or 0)
+    except ValueError:
+        last = 0
+    if time.time() - last < INTERVAL:
+        return
+    import threading
+
+    threading.Thread(target=check_available, daemon=True).start()
+
+
+def check_available():
+    """最新リリースを調べ、新しければ状態ディレクトリの `available` に版名を書く。版名、無ければ None。"""
+    try:
+        rel = json.loads(_get("https://api.github.com/repos/%s/releases/latest" % REPO))
+        tag = rel["tag_name"]
+        _write("last_check", str(int(time.time())))
+        if is_newer(tag, current_version_frozen()):
+            _write("available", tag.lstrip("v"))
+            return tag.lstrip("v")
+    except Exception as e:  # noqa: BLE001
+        _write("last_error", repr(e))
+    return None
 
 
 def fetch_setup():

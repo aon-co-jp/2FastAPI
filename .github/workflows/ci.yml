@@ -73,3 +73,59 @@ jobs:
         run: Get-ChildItem installer/Output/2FastAPI-Setup-*.exe | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" | Out-File -Encoding ascii "$($_.FullName).sha256" }
       - uses: softprops/action-gh-release@v2
         with: { files: "installer/Output/2FastAPI-Setup-*" }
+  deb:
+    # Linux: .deb (amd64 / arm64). Built and tested (dpkg -i -> run -> dpkg -r -> nothing left) on every push; attached to the release on tags.
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: amd64 }
+          - { os: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m pip install pyinstaller libcst .
+      - name: build the 2fastapi binary
+        run: python -m PyInstaller --noconfirm --onefile --name 2fastapi --collect-submodules libcst --collect-submodules tofastapi --hidden-import tofastapi._autoupdate --paths src installer/cli_entry.py
+      - name: build the .deb
+        run: |
+          VER=$(python -c "import tofastapi;print(tofastapi.__version__)")
+          bash installer/build-deb.sh dist/2fastapi "$VER" ${{ matrix.arch }} out
+      - name: test (dpkg -i, run, dpkg -r, nothing left behind)
+        run: bash installer/test-deb.sh out/*.deb
+      - name: sha256 (used by the release page)
+        run: cd out && for f in *.deb; do sha256sum "$f" > "$f.sha256"; done
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with: { files: "out/*" }
+  pkg:
+    # macOS: .pkg for the current user (x64 / arm64), no admin rights. Tested with pkgutil --expand and installer -pkg.
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15-intel, arch: x64 }
+          - { os: macos-latest, arch: arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m pip install pyinstaller libcst .
+      - name: build the 2fastapi binary
+        run: python -m PyInstaller --noconfirm --onefile --name 2fastapi --collect-submodules libcst --collect-submodules tofastapi --hidden-import tofastapi._autoupdate --paths src installer/cli_entry.py
+      - name: build the .pkg
+        run: |
+          VER=$(python -c "import tofastapi;print(tofastapi.__version__)")
+          bash installer/build-pkg.sh dist/2fastapi "$VER" ${{ matrix.arch }} out
+      - name: test (expand, installer -pkg, run, uninstall)
+        run: bash installer/test-pkg.sh out/*.pkg
+      - name: sha256 (used by the release page)
+        run: cd out && for f in *.pkg; do shasum -a 256 "$f" > "$f.sha256"; done
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with: { files: "out/*" }

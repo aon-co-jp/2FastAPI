@@ -47,3 +47,14 @@ def test_sha256_file(tmp_path):
 
 def test_setup_asset_name_is_known():
     assert u.setup_asset_name() in ("2FastAPI-Setup-x64.exe", "2FastAPI-Setup-arm64.exe")
+
+
+def test_frozen_notice_for_deb_pkg(tmp_path, monkeypatch):
+    monkeypatch.setattr(u.os.path, "expanduser", lambda p: str(tmp_path))
+    monkeypatch.setattr(u, "_get", lambda url, timeout=15: b'{"tag_name": "v99.0.0", "assets": []}')
+    assert u.check_available() == "99.0.0"
+    assert u._read("available") == "99.0.0"
+    monkeypatch.setattr(u, "_get", lambda url, timeout=15: b'{"tag_name": "v0.0.1"}')
+    assert u.check_available() is None
+    monkeypatch.setattr(u, "_get", lambda url, timeout=15: (_ for _ in ()).throw(OSError("offline")))
+    assert u.check_available() is None and "offline" in u._read("last_error")

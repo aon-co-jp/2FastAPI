@@ -1,5 +1,5 @@
 """2FastAPI (to FastAPI): convert Flask / Django code to FastAPI-compatible code (MFastAPI compatible)."""
-__version__ = "0.5.3"
+__version__ = "0.5.4"
 
 
 def __getattr__(name):  # lazy: the GUI can start before the conversion library (libcst) is imported
