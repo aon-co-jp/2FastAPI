@@ -54,6 +54,9 @@ def install_shortcut() -> List[str]:
 def main(selftest: bool = False, install_shortcut: bool = False) -> int:  # noqa: F811 (flag name mirrors the CLI)
     if install_shortcut:
         return 0 if globals()["_install"]() else 1
+    from ._autoupdate import maybe_start
+
+    maybe_start()  # 起動時の自動バージョンアップ(24時間に1回。TOFASTAPI_NO_UPDATE=1 で停止)
     import tkinter as tk
     from tkinter import filedialog, messagebox, ttk
 

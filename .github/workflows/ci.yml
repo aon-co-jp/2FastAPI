@@ -28,6 +28,8 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - run: python -m pip install build && python -m build
+      - name: sha256 for every asset (used by the startup self-update)
+        run: cd dist && for f in *; do sha256sum "$f" > "$f.sha256"; done
       - uses: softprops/action-gh-release@v2
         with: { files: "dist/*" }
   windows-exe:
@@ -53,5 +55,8 @@ jobs:
         run: |
           if (-not (Test-Path "C:\Program Files (x86)\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DArch=${{ matrix.arch }} /DExeDir=..\dist installer\2fastapi.iss
+      - name: sha256 of the installer (used by the startup self-update)
+        shell: pwsh
+        run: Get-ChildItem installer/Output/2FastAPI-Setup-*.exe | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" | Out-File -Encoding ascii "$($_.FullName).sha256" }
       - uses: softprops/action-gh-release@v2
-        with: { files: "installer/Output/2FastAPI-Setup-*.exe" }
+        with: { files: "installer/Output/2FastAPI-Setup-*" }

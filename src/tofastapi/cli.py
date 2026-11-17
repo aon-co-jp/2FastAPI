@@ -18,6 +18,9 @@ from . import __version__
 
 
 def main(argv=None) -> int:
+    from ._autoupdate import maybe_start
+
+    maybe_start()  # 起動時の自動バージョンアップ(24時間に1回、切り離して確認。TOFASTAPI_NO_UPDATE=1 で停止)
     ap = argparse.ArgumentParser(prog="2fastapi", description="Convert Flask / Django code to FastAPI (MFastAPI compatible).")
     ap.add_argument("--version", action="version", version="2fastapi " + __version__)
     sub = ap.add_subparsers(dest="cmd", required=True)
