@@ -21,6 +21,16 @@ jobs:
       - run: python -m pip install -e ".[test]" pytest
       - run: python -m pytest -q
         env: { PYTHONPATH: "tests" }
+  test-linux:
+    # Ubuntu only (no macOS queue): gates the .deb job
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: python -m pip install -e ".[test]" pytest
+      - run: python -m pytest -q
+        env: { PYTHONPATH: "tests" }
   upstream-issue:
     # 毎日の定期実行(最新の Python / Flask / Django / FastAPI / Rust で再試験)が失敗したら、日付つきで issue を1件起こす
     if: failure() && github.event_name == 'schedule'
@@ -75,7 +85,7 @@ jobs:
         with: { files: "installer/Output/2FastAPI-Setup-*" }
   deb:
     # Linux: .deb (amd64 / arm64). Built and tested (dpkg -i -> run -> dpkg -r -> nothing left) on every push; attached to the release on tags.
-    needs: test
+    needs: test-linux
     strategy:
       fail-fast: false
       matrix:
