@@ -2,6 +2,8 @@ name: ci
 on:
   push: { branches: [main], tags: ['v*'] }
   pull_request:
+  schedule:
+    - cron: '23 3 * * *'   # 毎日: 最新の上流で再試験
   workflow_dispatch:
 permissions: { contents: write }
 jobs:
@@ -19,6 +21,17 @@ jobs:
       - run: python -m pip install -e ".[test]" pytest
       - run: python -m pytest -q
         env: { PYTHONPATH: "tests" }
+  upstream-issue:
+    # 毎日の定期実行(最新の Python / Flask / Django / FastAPI / Rust で再試験)が失敗したら、日付つきで issue を1件起こす
+    if: failure() && github.event_name == 'schedule'
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions: { issues: write }
+    steps:
+      - env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          t="upstream: 最新版での定期試験が失敗 ($(date -u +%F))"
+          gh issue list -R "$GITHUB_REPOSITORY" --state open --search "$t in:title" --json number -q '.[0].number' | grep -q . ||             gh issue create -R "$GITHUB_REPOSITORY" --title "$t" --body "最新の上流(Python・Flask・Django・FastAPI・Starlette・Rust・Mojo)で定期試験が失敗しました。実行: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
