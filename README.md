@@ -1,3 +1,5 @@
+> Latest translations / 翻訳の最新版: [0-LATEST-TRANSLATIONS.md](0-LATEST-TRANSLATIONS.md)
+
 # 2FastAPI (to FastAPI)
 
 **日本語**: DjangoやFlaskを使ったPythonプログラムを **FastAPI** へ変換するツール(`2` = `to`、`toFastAPI`)。出力は FastAPI と互換のコードで、[MFastAPI](https://github.com/aon-co-jp/MFastAPI)(FastAPI互換を保証)でもそのまま動く想定。コメントと書式は保ったまま書き換える(libcst)。
